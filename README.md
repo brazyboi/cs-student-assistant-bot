@@ -2,8 +2,6 @@
 
 An AI agent that delivers daily job listings, tech news, LeetCode problems, and research papers to your Discord. Built on nanobot, no frameworks, fully hackable.
 
-![demo](case/code.gif)
-
 ---
 
 ## What It Does
