@@ -5,22 +5,9 @@ import os
 from datetime import datetime
 import requests
 
-CONFIG_PATH = os.path.expanduser("~/.nanobot/config.json")
-WEBHOOK_FILE = os.path.expanduser("~/.config/nanobot/discord_webhook.txt")
-
-def load_mcp_config():
-    try:
-        with open(CONFIG_PATH, 'r') as f:
-            config = json.load(f)
-        mcp_servers = config.get('tools', {}).get('mcpServers', {})
-        adzuna_config = mcp_servers.get('adzuna-mcp', {})
-        return (
-            adzuna_config.get('command', 'uvx'),
-            adzuna_config.get('args', []),
-            adzuna_config.get('env', {})
-        )
-    except Exception as e:
-        raise ValueError(f"Failed to load MCP config from {CONFIG_PATH}: {e}")
+DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
+ADZUNA_APP_ID = os.environ.get('ADZUNA_APP_ID')
+ADZUNA_APP_KEY = os.environ.get('ADZUNA_APP_KEY')
 
 def read_webhook():
     try:
@@ -30,14 +17,13 @@ def read_webhook():
         return None
 
 def mcp_tool_call(query, location, results_per_page=10):
-    command, args, mcp_env = load_mcp_config()
-    cmd = [command] + args  
+    if not ADZUNA_APP_ID or not ADZUNA_APP_KEY:
+        raise ValueError("Missing ADZUNA_APP_ID or ADZUNA_APP_KEY in environment")
 
     env = os.environ.copy()
-    env.update(mcp_env)  # Inject ADZUNA_APP_ID/KEY from config
 
     proc = subprocess.Popen(
-        cmd,
+        ['uvx', 'adzuna-mcp'],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -98,7 +84,7 @@ def format_jobs(data):
         return "No jobs found today. Try broader terms/location."
 
     date_str = datetime.now().strftime('%Y-%m-%d')
-    msg = f"🔍 **Adzuna {data.get(\"count\", \"?\")} Jobs** - {date_str}\n\n"
+    msg = f"**Adzuna {data.get(\"count\", \"?\")} Jobs** - {date_str}\n\n"
     for i, job in enumerate(jobs[:10], 1):
         title = job.get('title', 'N/A')
         company = job.get('company', {}).get('display_name', 'N/A')
@@ -115,34 +101,37 @@ def format_jobs(data):
 
     return msg
 
-def send_to_discord(webhook_url, message):
+def send_to_discord(DISCORD_WEBHOOK, message):
     if len(message) > 1900:
         message = message[:1890] + "\n*(truncated)*"
     try:
-        requests.post(webhook_url, json={"content": message}, timeout=10).raise_for_status()
-        print("✅ Sent to Discord!")
+        requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10).raise_for_status()
+        print("Sent to Discord!")
     except Exception as e:
-        print(f"❌ Discord send failed: {e}")
+        print(f"Discord send failed: {e}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Usage: python3 search_jobs.py 'AI/ML' 'Irvine'")
         sys.exit(1)
 
-    query, location = sys.argv[1], sys.argv[2]
-    webhook_url = read_webhook()
-
-    if not webhook_url:
-        print("❌ Missing Discord webhook: ~/.config/nanobot/discord_webhook.txt")
+    if not DISCORD_WEBHOOK:
+        print("Missing DISCORD_WEBHOOK environment variable")
         sys.exit(1)
 
-    print(f"🔍 Searching Adzuna (via config MCP) for '{query}' in '{location}'...")
+    query, location = sys.argv[1], sys.argv[2]
+
+    if not DISCORD_WEBHOOK:
+        print("Missing Discord webhook: ~/.config/nanobot/discord_webhook.txt")
+        sys.exit(1)
+
+    print(f"Searching Adzuna (via config MCP) for '{query}' in '{location}'...")
     try:
         jobs_data = mcp_tool_call(query, location)
         message = format_jobs(jobs_data)
         print(message)
-        send_to_discord(webhook_url, message)
+        send_to_discord(DISCORD_WEBHOOK, message)
     except Exception as e:
-        err_msg = f"❌ Error: {str(e)}"
+        err_msg = f"Error: {str(e)}"
         print(err_msg)
-        send_to_discord(webhook_url, err_msg)
+        send_to_discord(DISCORD_WEBHOOK, err_msg)
