@@ -9,31 +9,48 @@ DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
 ADZUNA_APP_ID = os.environ.get('ADZUNA_APP_ID')
 ADZUNA_APP_KEY = os.environ.get('ADZUNA_APP_KEY')
 
-def read_webhook():
-    try:
-        with open(WEBHOOK_FILE, 'r') as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        return None
-
 def mcp_tool_call(query, location, results_per_page=10):
-    if not ADZUNA_APP_ID or not ADZUNA_APP_KEY:
-        raise ValueError("Missing ADZUNA_APP_ID or ADZUNA_APP_KEY in environment")
-
-    env = os.environ.copy()
-
     proc = subprocess.Popen(
-        ['uvx', 'adzuna-mcp'],
+        ['uvx', '--from', 'git+https://github.com/folathecoder/adzuna-job-search-mcp.git', 'adzuna-mcp'],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-        env=env
+        env=os.environ.copy()
     )
 
-    # JSON-RPC tools/call (MCP stdio transport)
-    call_msg = {
+    def send(msg):
+        proc.stdin.write(json.dumps(msg) + '\n')
+        proc.stdin.flush()
+
+    def recv():
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                return None
+            line = line.strip()
+            if line:
+                return json.loads(line)
+
+    # initialize
+    send({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "search_jobs", "version": "1.0"}
+        }
+    })
+    recv()  # read initialize response
+
+    # initialized notification (no response expected)
+    send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    # actual tool call
+    send({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
@@ -47,25 +64,9 @@ def mcp_tool_call(query, location, results_per_page=10):
                 "full_time": True
             }
         }
-    }
-    proc.stdin.write(json.dumps(call_msg) + '\n')
-    proc.stdin.flush()
+    })
 
-    # Parse SSE-like response lines
-    result = None
-    for line in proc.stdout:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith('data: '):
-            try:
-                data = json.loads(line[6:])
-                if 'result' in data and data['id'] == 1:
-                    result = data['result']
-                    break
-            except json.JSONDecodeError:
-                continue
-
+    result = recv()
     proc.stdin.close()
     proc.terminate()
     proc.wait()
@@ -73,10 +74,7 @@ def mcp_tool_call(query, location, results_per_page=10):
     if result is None:
         raise ValueError("No valid result from MCP server")
 
-    # Parse Adzuna response (stringified JSON in some MCP impls)
-    if isinstance(result, str):
-        result = json.loads(result)
-    return result
+    return result.get('result', {}).get('structuredContent')
 
 def format_jobs(data):
     jobs = data.get('results', [])
@@ -84,7 +82,7 @@ def format_jobs(data):
         return "No jobs found today. Try broader terms/location."
 
     date_str = datetime.now().strftime('%Y-%m-%d')
-    msg = f"**Adzuna {data.get(\"count\", \"?\")} Jobs** - {date_str}\n\n"
+    msg = f"**Adzuna {data.get('count', '?')} Jobs** - {date_str}\n\n"
     for i, job in enumerate(jobs[:10], 1):
         title = job.get('title', 'N/A')
         company = job.get('company', {}).get('display_name', 'N/A')
@@ -101,11 +99,11 @@ def format_jobs(data):
 
     return msg
 
-def send_to_discord(DISCORD_WEBHOOK, message):
+def send_to_discord(webhook, message):
     if len(message) > 1900:
         message = message[:1890] + "\n*(truncated)*"
     try:
-        requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10).raise_for_status()
+        requests.post(webhook, json={"content": message}, timeout=10).raise_for_status()
         print("Sent to Discord!")
     except Exception as e:
         print(f"Discord send failed: {e}")
