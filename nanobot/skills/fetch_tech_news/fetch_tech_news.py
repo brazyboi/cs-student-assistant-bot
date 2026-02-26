@@ -59,7 +59,7 @@ def format_stories(stories):
     if not stories:
         return "No CS-relevant stories found today..."
     date = datetime.now().strftime('%Y-%m-%d')
-    msg = f"📰 **Hacker News CS Digest** - {date}\n\n"
+    msg = f"**Hacker News CS Digest** - {date}\n\n"
     for i, story in enumerate(stories, 1):
         title = story['title']
         score = story['score']
